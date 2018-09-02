@@ -1,0 +1,6 @@
+github.com/boltdb/bolt v1.3.1 h1:JQmyP4ZBrce+ZQu0dY660FMfatumYDLun9hBCUVIkF4=
+github.com/boltdb/bolt v1.3.1/go.mod h1:clJnj/oiGkjum5o1McbSZDSLxVThjynRyGBgiAx27Ps=
+github.com/nicolagi/go9p v0.0.0-20190223215146-b21015e18963 h1:zbgzUoI/iNm/8dYnKXwmXSPFNGxJmL5ZMam/rV6FAwA=
+github.com/nicolagi/go9p v0.0.0-20190223215146-b21015e18963/go.mod h1:8xFEdKAXzfhwGXPzBHdRdvaDxVhfFzfefJsOVmElUFo=
+golang.org/x/sys v0.0.0-20180909124046-d0be0721c37e h1:o3PsSEY8E4eXWkXrIP9YJALUkVZqzHJT5DOasTyn8Vs=
+golang.org/x/sys v0.0.0-20180909124046-d0be0721c37e/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
