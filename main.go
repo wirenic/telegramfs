@@ -292,6 +292,7 @@ func handleUpdateNewMessage(doc Document) {
 		var m tgMessage
 
 		m.ID, _ = doc.GetInt64("message.id")
+		m.IsOutgoing, _ = doc.GetBool("message.is_outgoing")
 		senderID, _ := doc.GetInt64("message.sender_user_id")
 		m.ChatID, _ = doc.GetInt64("message.chat_id")
 		whenUnix, _ := doc.GetInt64("message.date")
@@ -444,10 +445,26 @@ func addHistory(root *srv.File) {
 // addMessage assumes chat is a chat file, and that it is a new file system node.
 func addMessage(chat *srv.File, m *tgMessage) {
 	f := new(srv.File)
+	const width = 70
+	var formatted bytes.Buffer
+	var indentPrefix, doubleIndentPrefix []byte
+	if m.IsOutgoing {
+		indentPrefix = nil
+		doubleIndentPrefix = []byte("> ")
+	} else {
+		indentPrefix = []byte("> ")
+		doubleIndentPrefix = []byte("> > ")
+	}
+	if m.QuotedText != "" {
+		formatted.Write(wrap([]byte(m.QuotedText), doubleIndentPrefix, width))
+		formatted.WriteByte(10)
+	}
+	formatted.Write(wrap([]byte(m.Text), indentPrefix, width))
+	formatted.WriteByte(10)
 	_ = f.Add(chat, fmt.Sprintf("%d.txt", m.When.Unix()), user, group, 0400, &messageOps{
 		chatID:    m.ChatID,
 		messageID: m.ID,
-		contents:  []byte(m.Text),
+		contents:  formatted.Bytes(),
 	})
 	// These metadata changes need to happen after (*srv.File).Add, lest they be
 	// overwritten.

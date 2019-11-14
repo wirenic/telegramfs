@@ -13,4 +13,5 @@ type tgMessage struct {
 	Sender     string
 	QuotedText string
 	Text       string
+	IsOutgoing bool
 }
