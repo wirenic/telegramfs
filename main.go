@@ -404,6 +404,10 @@ func addHistory(root *srv.File) {
 		err := tx.Bucket(chatsBucket).ForEach(func(handle, chatID []byte) error {
 			c := newFile()
 			_ = c.Add(root, string(handle), user, group, p.DMDIR|0700, nil)
+			// Set timestamps to 0, so they will be updated by the messages that
+			// will be added below.
+			c.Mtime = 0
+			c.Atime = 0
 			_ = newFile().Add(c, "in", user, group, 0600, newInOps(key2id(chatID)))
 			return nil
 		})
@@ -449,6 +453,12 @@ func addMessage(chat *srv.File, m *tgMessage) {
 	// overwritten.
 	f.Mtime = uint32(m.When.Unix())
 	f.Atime = f.Mtime
+	if chat.Mtime < f.Mtime {
+		chat.Mtime = f.Mtime
+	}
+	if chat.Atime < f.Atime {
+		chat.Atime = f.Atime
+	}
 }
 
 func id2key(id int64) []byte {
