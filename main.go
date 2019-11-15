@@ -26,8 +26,8 @@ var (
 
 	// The Bolt database for persistence, divided into three buckets.
 	database       *bolt.DB
-	usersBucket    = []byte("users")
-	chatsBucket    = []byte("chats")
+	usersBucket    = []byte("users") // maps ids to handles
+	chatsBucket    = []byte("chats") // maps handles to ids
 	messagesBucket = []byte("messages")
 
 	// The Telegram client (from tdlib).
@@ -41,6 +41,22 @@ var (
 
 	config *tgConfig
 )
+
+// chatOps is the file system node for a directory of messages that belong to a single chat.
+type chatOps struct {
+	chatID int64
+}
+
+func newChatOps(chatID int64) *chatOps {
+	return &chatOps{chatID: chatID}
+}
+
+// Removes allows removing a chat from the database (not from Telegram).
+func (c *chatOps) Remove(f *srv.FFid) error {
+	return database.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(chatsBucket).Delete([]byte(f.F.Name))
+	})
+}
 
 // messageOps is a read-only file system node for messages. When a file is read
 // and closed, it is marked read in Telegram.
@@ -78,6 +94,14 @@ func (m *messageOps) Clunk(*srv.FFid) error {
 		m.state++
 	}
 	return nil
+}
+
+// Remove removes a message from the database, not from Telegram, and removes
+// the node from the filesystem.
+func (m *messageOps) Remove(*srv.FFid) error {
+	return database.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(messagesBucket).Delete(id2key(m.messageID))
+	})
 }
 
 // inOps is a write-only file system node for sending messages to a chat.
@@ -129,6 +153,12 @@ func (c *inOps) Clunk(*srv.FFid) error {
 		},
 	})
 	c.b.Truncate(0)
+	return nil
+}
+
+// Remove allows removing the control file. This makes it possibly to remove
+// chats from the file system via recursive remove.
+func (c *inOps) Remove(*srv.FFid) error {
 	return nil
 }
 
@@ -336,7 +366,7 @@ func handleUpdateNewMessage(doc Document) {
 		c := root.Find(string(handle))
 		if c == nil {
 			c = newFile()
-			_ = c.Add(root, string(handle), user, group, p.DMDIR|0700, nil)
+			_ = c.Add(root, string(handle), user, group, p.DMDIR|0700, newChatOps(m.ChatID))
 			// A write-only file to send new messages to the chat.
 			in := newFile()
 			_ = in.Add(c, "in", user, group, 0600, newInOps(m.ChatID))
@@ -404,7 +434,7 @@ func addHistory(root *srv.File) {
 	err := database.View(func(tx *bolt.Tx) error {
 		err := tx.Bucket(chatsBucket).ForEach(func(handle, chatID []byte) error {
 			c := newFile()
-			_ = c.Add(root, string(handle), user, group, p.DMDIR|0700, nil)
+			_ = c.Add(root, string(handle), user, group, p.DMDIR|0700, newChatOps(key2id(chatID)))
 			// Set timestamps to 0, so they will be updated by the messages that
 			// will be added below.
 			c.Mtime = 0
@@ -470,11 +500,13 @@ func addMessage(chat *srv.File, m *tgMessage) {
 	// overwritten.
 	f.Mtime = uint32(m.When.Unix())
 	f.Atime = f.Mtime
-	if chat.Mtime < f.Mtime {
-		chat.Mtime = f.Mtime
-	}
-	if chat.Atime < f.Atime {
-		chat.Atime = f.Atime
+	if chat != nil {
+		if chat.Mtime < f.Mtime {
+			chat.Mtime = f.Mtime
+		}
+		if chat.Atime < f.Atime {
+			chat.Atime = f.Atime
+		}
 	}
 }
 
