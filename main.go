@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -16,6 +18,7 @@ import (
 	"github.com/boltdb/bolt"
 	"github.com/nicolagi/go9p/p"
 	"github.com/nicolagi/go9p/p/srv"
+	"github.com/nicolagi/telegramfs/internal/nodes"
 )
 
 var (
@@ -61,9 +64,11 @@ func (c *chatOps) Remove(f *srv.FFid) error {
 // messageOps is a read-only file system node for messages. When a file is read
 // and closed, it is marked read in Telegram.
 type messageOps struct {
-	chatID    int64
-	messageID int64
-	contents  []byte
+	chatID     int64
+	messageID  int64
+	isOutgoing bool
+	contents   *nodes.RAMFile
+	modified   bool
 
 	// 0 not read
 	// 1 read
@@ -71,15 +76,37 @@ type messageOps struct {
 	state uint8
 }
 
+// Wstat implements srv.FWstatOp. It only allows truncating the contents to zero
+// length.
+func (m *messageOps) Wstat(_ *srv.FFid, dir *p.Dir) error {
+	if dir.ChangeLength() && dir.Length == 0 {
+		m.contents.Truncate()
+	}
+	return nil
+}
+
 // Read implements srv.FReadOp.
 func (m *messageOps) Read(_ *srv.FFid, buf []byte, offset uint64) (int, error) {
-	if offset > uint64(len(m.contents)) {
-		return 0, nil
+	n, err := m.contents.ReadAt(buf, int64(offset))
+	// In 9P, we don't answer with Rerror when we get to EOF!
+	if err == io.EOF {
+		err = nil
 	}
-	if m.state == 0 {
-		m.state++
+	if n > 0 {
+		if m.state == 0 {
+			m.state++
+		}
 	}
-	return copy(buf, m.contents[offset:]), nil
+	return n, err
+}
+
+// Write implements srv.FWriteOp.
+func (m *messageOps) Write(fid *srv.FFid, data []byte, offset uint64) (int, error) {
+	n, err := m.contents.WriteAt(data, int64(offset))
+	if n > 0 {
+		m.modified = true
+	}
+	return n, err
 }
 
 // Clunk implements srv.FClunkOp.
@@ -93,7 +120,54 @@ func (m *messageOps) Clunk(*srv.FFid) error {
 		})
 		m.state++
 	}
-	return nil
+	if !m.modified {
+		return nil
+	}
+	// Break byte slice into lines, trim those that start with a prefix. Whatever
+	// remains, is the edited text / reply text. If m.IsOutgoing then edit else
+	// reply.
+	s := bufio.NewScanner(m.contents)
+	var edited bytes.Buffer
+	for s.Scan() {
+		line := s.Text()
+		if strings.HasPrefix(line, "> ") {
+			continue
+		}
+		edited.WriteString(line)
+		edited.WriteRune(10)
+	}
+	if err := s.Err(); err != nil {
+		return err
+	}
+	if m.isOutgoing {
+		// Maybe something like the following could be used for editing.
+		// Probably also need to listen to message update events.
+		// https://pastebin.com/Z4cpncZ1
+	} else {
+		// Reply to message
+		tgSend(client, genericMap{
+			"@type":               "sendMessage",
+			"chat_id":             m.chatID,
+			"reply_to_message_id": m.messageID,
+			"input_message_content": genericMap{
+				"@type": "inputMessageText",
+				"text": genericMap{
+					"text": edited.String(),
+				},
+			},
+		})
+	}
+	m.modified = false
+	return database.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(messagesBucket).Get(id2key(m.messageID))
+		var msg tgMessage
+		if err := json.Unmarshal(v, &msg); err != nil {
+			return err
+		}
+		m.contents.Truncate()
+		_, _ = m.contents.WriteAt(getFormattedText(&msg), 0)
+		return nil
+	})
 }
 
 // Remove removes a message from the database, not from Telegram, and removes
@@ -472,9 +546,7 @@ func addHistory(root *srv.File) {
 	}
 }
 
-// addMessage assumes chat is a chat file, and that it is a new file system node.
-func addMessage(chat *srv.File, m *tgMessage) {
-	f := new(srv.File)
+func getFormattedText(m *tgMessage) []byte {
 	const width = 70
 	var formatted bytes.Buffer
 	var indentPrefix, doubleIndentPrefix []byte
@@ -491,10 +563,17 @@ func addMessage(chat *srv.File, m *tgMessage) {
 	}
 	formatted.Write(wrap([]byte(m.Text), indentPrefix, width))
 	formatted.WriteByte(10)
-	_ = f.Add(chat, fmt.Sprintf("%d.txt", m.When.Unix()), user, group, 0400, &messageOps{
-		chatID:    m.ChatID,
-		messageID: m.ID,
-		contents:  formatted.Bytes(),
+	return formatted.Bytes()
+}
+
+// addMessage assumes chat is a chat file, and that it is a new file system node.
+func addMessage(chat *srv.File, m *tgMessage) {
+	f := new(srv.File)
+	_ = f.Add(chat, fmt.Sprintf("%d.txt", m.When.Unix()), user, group, 0600, &messageOps{
+		chatID:     m.ChatID,
+		messageID:  m.ID,
+		isOutgoing: m.IsOutgoing,
+		contents:   nodes.NewRAMFile(getFormattedText(m)),
 	})
 	// These metadata changes need to happen after (*srv.File).Add, lest they be
 	// overwritten.

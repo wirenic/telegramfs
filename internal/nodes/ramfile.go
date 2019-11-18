@@ -26,6 +26,7 @@ func (f *RAMFile) Truncate() {
 	f.off = 0
 }
 
+// Read implements io.Reader.
 func (f *RAMFile) Read(p []byte) (n int, err error) {
 	n, err = f.ReadAt(p, f.off)
 	f.off += int64(n)
