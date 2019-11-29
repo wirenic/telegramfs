@@ -37,7 +37,8 @@ var (
 	client unsafe.Pointer
 
 	// The file system root node.
-	root *srv.File
+	root     *srv.File
+	msgNodes = make(map[int64]*messageOps)
 
 	// The authorization code command line option.
 	authorizationCode string
@@ -278,6 +279,8 @@ func main() {
 				handleUpdateUser(eventJSON)
 			case "updateNewMessage":
 				handleUpdateNewMessage(eventJSON)
+			case "updateMessageContent":
+				handleUpdateMessageContent(eventJSON)
 			case "updateAuthorizationState":
 				handleUpdateAuthorizationState(eventJSON)
 			default:
@@ -453,6 +456,35 @@ func handleUpdateNewMessage(doc Document) {
 	}
 }
 
+func handleUpdateMessageContent(doc Document) {
+	messageID, _ := doc.GetInt64("message_id")
+	newText, _ := doc.GetString("new_content.text.text")
+
+	err := database.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(messagesBucket)
+		key := id2key(messageID)
+		value := bucket.Get(key)
+		if value == nil {
+			// We don't know about this message: no op.
+			return nil
+		}
+		var m tgMessage
+		if err := json.Unmarshal(value, &m); err != nil {
+			return err
+		}
+		m.Text = strings.TrimSpace(newText)
+		if ops := msgNodes[messageID]; ops != nil {
+			ops.contents.Truncate()
+			_, _ = ops.contents.WriteAt(getFormattedText(&m), 0)
+		}
+		value, _ = json.Marshal(&m)
+		return bucket.Put(key, value)
+	})
+	if err != nil {
+		log.Printf("Could not handle message update: %v", err)
+	}
+}
+
 func handleUpdateAuthorizationState(j Document) {
 	kind, ok := j.GetString("authorization_state.@type")
 	if !ok {
@@ -569,12 +601,14 @@ func getFormattedText(m *tgMessage) []byte {
 // addMessage assumes chat is a chat file, and that it is a new file system node.
 func addMessage(chat *srv.File, m *tgMessage) {
 	f := new(srv.File)
-	_ = f.Add(chat, fmt.Sprintf("%d.txt", m.When.Unix()), user, group, 0600, &messageOps{
+	msgNode := &messageOps{
 		chatID:     m.ChatID,
 		messageID:  m.ID,
 		isOutgoing: m.IsOutgoing,
 		contents:   nodes.NewRAMFile(getFormattedText(m)),
-	})
+	}
+	msgNodes[m.ID] = msgNode
+	_ = f.Add(chat, fmt.Sprintf("%d.txt", m.When.Unix()), user, group, 0600, msgNode)
 	// These metadata changes need to happen after (*srv.File).Add, lest they be
 	// overwritten.
 	f.Mtime = uint32(m.When.Unix())
