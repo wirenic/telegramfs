@@ -67,3 +67,8 @@ func (f *RAMFile) WriteAt(p []byte, off int64) (n int, err error) {
 func len64(p []byte) int64 {
 	return int64(len(p))
 }
+
+// Size is analogous to os.FileInfo.Size.
+func (f *RAMFile) Size() int64 {
+	return len64(f.buffer)
+}

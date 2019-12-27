@@ -77,6 +77,12 @@ type messageOps struct {
 	state uint8
 }
 
+// Stat implements srv.FStatOp.
+func (m *messageOps) Stat(fid *srv.FFid) error {
+	fid.F.Length = uint64(m.contents.Size())
+	return nil
+}
+
 // Wstat implements srv.FWstatOp. It only allows truncating the contents to zero
 // length.
 func (m *messageOps) Wstat(_ *srv.FFid, dir *p.Dir) error {
