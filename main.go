@@ -12,12 +12,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/boltdb/bolt"
-	"github.com/nicolagi/go9p/p"
-	"github.com/nicolagi/go9p/p/srv"
+	"github.com/lionkov/go9p/p"
+	"github.com/lionkov/go9p/p/srv"
 	"github.com/nicolagi/telegramfs/internal/nodes"
 )
 
@@ -161,6 +162,9 @@ func (m *messageOps) Clunk(*srv.FFid) error {
 				"text": genericMap{
 					"text": edited.String(),
 				},
+				// To send formatted code and other things, I'd need to send an entities property,
+				// containing offsets, lengths, and types of the entities. See:
+				// https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1formatted_text.html
 			},
 		})
 	}
@@ -183,6 +187,41 @@ func (m *messageOps) Remove(*srv.FFid) error {
 	return database.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(messagesBucket).Delete(id2key(m.messageID))
 	})
+}
+
+// outOps is a read-only file system node for reading messages as they come.
+type outOps struct {
+	chatID int64
+	mu     sync.Mutex
+	cond   *sync.Cond
+	buf    []byte
+	mtime  uint32
+}
+
+func newOutOps(chatID int64) *outOps {
+	var ops outOps
+	ops.chatID = chatID
+	ops.cond = sync.NewCond(&ops.mu)
+	return &ops
+}
+
+func (c *outOps) Stat(fid *srv.FFid) error {
+	fid.F.Length = uint64(len(c.buf))
+	fid.F.Mtime = c.mtime
+	fid.F.Atime = c.mtime
+	return nil
+}
+
+func (c *outOps) Read(_ *srv.FFid, p []byte, off uint64) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	blen := uint64(len(c.buf))
+	for off >= blen {
+		c.cond.Wait()
+		blen = uint64(len(c.buf))
+	}
+	n := copy(p, c.buf[off:])
+	return n, nil
 }
 
 // inOps is a write-only file system node for sending messages to a chat.
@@ -406,7 +445,7 @@ func handleUpdateNewMessage(doc Document) {
 
 		m.ID, _ = doc.GetInt64("message.id")
 		m.IsOutgoing, _ = doc.GetBool("message.is_outgoing")
-		senderID, _ := doc.GetInt64("message.sender_user_id")
+		senderID, _ := doc.GetInt64("message.sender.user_id")
 		m.ChatID, _ = doc.GetInt64("message.chat_id")
 		whenUnix, _ := doc.GetInt64("message.date")
 		m.When = time.Unix(whenUnix, 0)
@@ -453,6 +492,8 @@ func handleUpdateNewMessage(doc Document) {
 			// A write-only file to send new messages to the chat.
 			in := newFile()
 			_ = in.Add(c, "in", user, group, 0600, newInOps(m.ChatID))
+			out := newFile()
+			_ = out.Add(c, "out", user, group, 0400, newOutOps(m.ChatID))
 		}
 		addMessage(c, &m)
 		return nil
@@ -551,7 +592,9 @@ func addHistory(root *srv.File) {
 			// will be added below.
 			c.Mtime = 0
 			c.Atime = 0
-			_ = newFile().Add(c, "in", user, group, 0600, newInOps(key2id(chatID)))
+			cid := key2id(chatID)
+			_ = newFile().Add(c, "in", user, group, 0600, newInOps(cid))
+			_ = newFile().Add(c, "out", user, group, 0400, newOutOps(cid))
 			return nil
 		})
 		if err != nil {
@@ -584,6 +627,16 @@ func addHistory(root *srv.File) {
 	}
 }
 
+func getTextWithAuthor(m *tgMessage) []byte {
+	var b bytes.Buffer
+	indentPrefix := "> "
+	if m.QuotedText != "" {
+		_, _ = fmt.Fprintf(&b, "%s § %s%s\n", m.Sender, indentPrefix, m.QuotedText)
+	}
+	_, _ = fmt.Fprintf(&b, "%s § %s\n", m.Sender, m.Text)
+	return b.Bytes()
+}
+
 func getFormattedText(m *tgMessage) []byte {
 	const width = 70
 	var formatted bytes.Buffer
@@ -604,14 +657,24 @@ func getFormattedText(m *tgMessage) []byte {
 	return formatted.Bytes()
 }
 
-// addMessage assumes chat is a chat file, and that it is a new file system node.
+// addMessage assumes chat is a chat directory.
 func addMessage(chat *srv.File, m *tgMessage) {
 	f := new(srv.File)
+	formatted := getFormattedText(m)
+	if chat != nil {
+		out := chat.Find("out")
+		ops := out.Ops.(*outOps)
+		ops.mu.Lock()
+		ops.buf = append(ops.buf, getTextWithAuthor(m)...)
+		ops.mtime = uint32(time.Now().Unix())
+		ops.cond.Broadcast()
+		ops.mu.Unlock()
+	}
 	msgNode := &messageOps{
 		chatID:     m.ChatID,
 		messageID:  m.ID,
 		isOutgoing: m.IsOutgoing,
-		contents:   nodes.NewRAMFile(getFormattedText(m)),
+		contents:   nodes.NewRAMFile(formatted),
 	}
 	msgNodes[m.ID] = msgNode
 	_ = f.Add(chat, fmt.Sprintf("%d.txt", m.When.Unix()), user, group, 0600, msgNode)
