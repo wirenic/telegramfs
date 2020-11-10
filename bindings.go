@@ -1,6 +1,7 @@
 package main
 
 // #cgo LDFLAGS: -ltdjson
+// #include <stdlib.h>
 // #include <td/telegram/td_log.h>
 // #include <td/telegram/td_json_client.h>
 import "C"
@@ -21,9 +22,9 @@ func tgSend(client unsafe.Pointer, query genericMap) {
 	if err != nil {
 		panic(err)
 	}
-	// Who frees this C string?
-	s := string(b)
-	C.td_json_client_send(client, C.CString(s))
+	s := C.CString(string(b))
+	defer C.free(unsafe.Pointer(s))
+	C.td_json_client_send(client, s)
 }
 
 func tgReceive(client unsafe.Pointer) string {
