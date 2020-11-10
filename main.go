@@ -16,10 +16,10 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/boltdb/bolt"
 	"github.com/lionkov/go9p/p"
 	"github.com/lionkov/go9p/p/srv"
 	"github.com/nicolagi/telegramfs/internal/nodes"
+	bolt "go.etcd.io/bbolt"
 )
 
 type identity string
@@ -343,6 +343,7 @@ func main() {
 	}()
 
 	fsrv := srv.NewFileSrv(root)
+	// fsrv.Debuglevel = srv.DbgPrintFcalls
 	fsrv.Dotu = false
 	fsrv.Start(fsrv)
 	fsrv.Id = "telegram"
