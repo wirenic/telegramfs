@@ -296,7 +296,6 @@ func main() {
 	flag.Parse()
 
 	config = mustLoadConfig(*configPath)
-	mustSetupLogging()
 	database = mustSetupDatabase()
 
 	root = newFile()
@@ -363,15 +362,6 @@ func mustLoadConfig(path string) *tgConfig {
 		log.Fatalf("Could not parse JSON from %q: %v", path, err)
 	}
 	return &config
-}
-
-func mustSetupLogging() {
-	path := os.ExpandEnv("$HOME/lib/telegramfs/log")
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
-	if err != nil {
-		log.Fatalf("Could not open log file %q: %v", path, err)
-	}
-	log.SetOutput(f)
 }
 
 func mustSetupDatabase() *bolt.DB {
