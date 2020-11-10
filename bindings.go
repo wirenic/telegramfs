@@ -13,8 +13,17 @@ import (
 type genericMap map[string]interface{}
 
 func tgClient() unsafe.Pointer {
-	C.td_set_log_verbosity_level(2) // warnings, debug warnings
 	return C.td_json_client_create()
+}
+
+func tgExecute(client unsafe.Pointer, query genericMap) {
+	b, err := json.Marshal(query)
+	if err != nil {
+		panic(err)
+	}
+	s := C.CString(string(b))
+	defer C.free(unsafe.Pointer(s))
+	C.td_json_client_execute(client, s)
 }
 
 func tgSend(client unsafe.Pointer, query genericMap) {

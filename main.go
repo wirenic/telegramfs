@@ -295,13 +295,18 @@ func main() {
 	flag.StringVar(&authorizationCode, "code", "", "authorization `code` (needed only once)")
 	flag.Parse()
 
+	client = tgClient()
+
+	tgExecute(client, genericMap{
+		"@type":               "setLogVerbosityLevel",
+		"new_verbosity_level": 2,
+	})
+
 	config = mustLoadConfig(*configPath)
 	database = mustSetupDatabase()
 
 	root = newFile()
 	_ = root.Add(nil, "root", user, group, p.DMDIR|0777, nil)
-
-	client = tgClient()
 
 	addHistory(root)
 
