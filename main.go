@@ -22,11 +22,19 @@ import (
 	"github.com/nicolagi/telegramfs/internal/nodes"
 )
 
+type identity string
+
+func (id identity) Name() string            { return string(id) }
+func (identity) Id() int                    { return -1 } /* Irrelevant, because we serve 9P2000 only */
+func (id identity) Groups() []p.Group       { return []p.Group{id} }
+func (id identity) IsMember(g p.Group) bool { return g.Name() == string(id) }
+func (id identity) Members() []p.User       { return []p.User{id} }
+
 var (
 	// The user and group owning all file system nodes will be the ones owning the
 	// process.
-	user  = p.OsUsers.Uid2User(os.Getuid())
-	group = p.OsUsers.Gid2Group(os.Getgid())
+	user  = identity("telegram")
+	group = identity("telegram")
 
 	// The Bolt database for persistence, divided into three buckets.
 	database       *bolt.DB
@@ -292,7 +300,7 @@ func main() {
 	database = mustSetupDatabase()
 
 	root = newFile()
-	_ = root.Add(nil, "root", user, group, p.DMDIR|0700, nil)
+	_ = root.Add(nil, "root", user, group, p.DMDIR|0777, nil)
 
 	client = tgClient()
 
@@ -488,12 +496,12 @@ func handleUpdateNewMessage(doc Document) {
 		c := root.Find(string(handle))
 		if c == nil {
 			c = newFile()
-			_ = c.Add(root, string(handle), user, group, p.DMDIR|0700, newChatOps(m.ChatID))
+			_ = c.Add(root, string(handle), user, group, p.DMDIR|0777, newChatOps(m.ChatID))
 			// A write-only file to send new messages to the chat.
 			in := newFile()
-			_ = in.Add(c, "in", user, group, 0600, newInOps(m.ChatID))
+			_ = in.Add(c, "in", user, group, 0666, newInOps(m.ChatID))
 			out := newFile()
-			_ = out.Add(c, "out", user, group, 0400, newOutOps(m.ChatID))
+			_ = out.Add(c, "out", user, group, 0444, newOutOps(m.ChatID))
 		}
 		addMessage(c, &m)
 		return nil
@@ -587,14 +595,14 @@ func addHistory(root *srv.File) {
 	err := database.View(func(tx *bolt.Tx) error {
 		err := tx.Bucket(chatsBucket).ForEach(func(handle, chatID []byte) error {
 			c := newFile()
-			_ = c.Add(root, string(handle), user, group, p.DMDIR|0700, newChatOps(key2id(chatID)))
+			_ = c.Add(root, string(handle), user, group, p.DMDIR|0777, newChatOps(key2id(chatID)))
 			// Set timestamps to 0, so they will be updated by the messages that
 			// will be added below.
 			c.Mtime = 0
 			c.Atime = 0
 			cid := key2id(chatID)
-			_ = newFile().Add(c, "in", user, group, 0600, newInOps(cid))
-			_ = newFile().Add(c, "out", user, group, 0400, newOutOps(cid))
+			_ = newFile().Add(c, "in", user, group, 0666, newInOps(cid))
+			_ = newFile().Add(c, "out", user, group, 0444, newOutOps(cid))
 			return nil
 		})
 		if err != nil {
@@ -677,7 +685,7 @@ func addMessage(chat *srv.File, m *tgMessage) {
 		contents:   nodes.NewRAMFile(formatted),
 	}
 	msgNodes[m.ID] = msgNode
-	_ = f.Add(chat, fmt.Sprintf("%d.txt", m.When.Unix()), user, group, 0600, msgNode)
+	_ = f.Add(chat, fmt.Sprintf("%d.txt", m.When.Unix()), user, group, 0666, msgNode)
 	// These metadata changes need to happen after (*srv.File).Add, lest they be
 	// overwritten.
 	f.Mtime = uint32(m.When.Unix())
