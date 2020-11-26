@@ -313,6 +313,8 @@ func main() {
 	// Spawn goroutine handlign incoming events from Telegram.
 	// It won't exit until the program is killed or the main goroutine exits.
 	go func() {
+		m := make(map[string]int)
+		lastLogged := time.Now()
 		for {
 			event := tgReceive(client)
 			if event == "" {
@@ -341,7 +343,18 @@ func main() {
 			case "updateAuthorizationState":
 				handleUpdateAuthorizationState(eventJSON)
 			default:
-				log.Printf("Unhandled event type %q", eventType)
+				m[eventType]++
+				if time.Since(lastLogged) > 5*time.Minute {
+					if len(m) > 0 {
+						var b bytes.Buffer
+						for e, c := range m {
+							fmt.Fprintf(&b, ", %s=%d", e, c)
+							delete(m, e)
+						}
+						log.Printf("Unhandled event types: %s", b.Bytes()[2:])
+					}
+					lastLogged = time.Now()
+				}
 			}
 		}
 	}()
