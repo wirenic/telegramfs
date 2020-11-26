@@ -642,23 +642,28 @@ func getTextWithAuthor(m *tgMessage) []byte {
 }
 
 func getFormattedText(m *tgMessage) []byte {
-	const width = 70
 	var formatted bytes.Buffer
-	var indentPrefix, doubleIndentPrefix []byte
-	if m.IsOutgoing {
-		indentPrefix = nil
-		doubleIndentPrefix = []byte("> ")
-	} else {
-		indentPrefix = []byte("> ")
-		doubleIndentPrefix = []byte("> > ")
+	indentPrefix := ""
+	doubleIndentPrefix := "> "
+	if !m.IsOutgoing {
+		indentPrefix += "> "
+		doubleIndentPrefix += "> "
 	}
 	if m.QuotedText != "" {
-		formatted.Write(wrap([]byte(m.QuotedText), doubleIndentPrefix, width))
-		formatted.WriteByte(10)
+		formatted.Write(addPrefix(m.QuotedText, doubleIndentPrefix))
 	}
-	formatted.Write(wrap([]byte(m.Text), indentPrefix, width))
-	formatted.WriteByte(10)
+	formatted.Write(addPrefix(m.Text, indentPrefix))
 	return formatted.Bytes()
+}
+
+func addPrefix(t, p string) []byte {
+	var b bytes.Buffer
+	s := bufio.NewScanner(strings.NewReader(t))
+	for s.Scan() {
+		_, _ = fmt.Fprintf(&b, "%s%s\n", p, s.Text())
+	}
+	_ = s.Err()
+	return b.Bytes()
 }
 
 // addMessage assumes chat is a chat directory.
