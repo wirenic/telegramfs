@@ -1,0 +1,30 @@
+#!/usr/local/plan9/bin/rc
+if(! ~ $#* 1){
+	echo Usage: telechat NICK >[1=2]
+	exit 1
+}
+username=`{9p -a 127.0.0.1:3232 ls | grep $1}
+if(! ~ $#username 1){
+	echo Usage: no or too many matches: $username >[1=2]
+	exit 1
+}
+label tg:$username
+fn shutdown{
+	kill $catpid
+	exit
+}
+fn sighup{
+	shutdown
+}
+fn sigint{
+	shutdown
+}
+9p -a 127.0.0.1:3232 read $username/out &
+catpid=$apid
+while(;){
+	message=`{read}
+	switch($"message){
+	case *
+		echo $"message | 9p -a 127.0.0.1:3232 write $username/in
+	}
+}

@@ -46,4 +46,14 @@
 //		cat $m^.txt
 //		echo
 //	}
+//
+// Alternatively, each chat directory contains an "out" file that contains all messages for that chat.
+// Therefore, another approach is to just
+//
+// 	cat my-contact/out
+//
+// and write to the "in" file in the same "my-contact" directory whenever you need to send a message to the chat.
+// (No need to use "tail -f", because reads will block until a new message arrives.)
+//
+// The script I use for chatting uses this latter approach, see telechat included in this repo.
 package main // import "github.com/nicolagi/telegramfs"
